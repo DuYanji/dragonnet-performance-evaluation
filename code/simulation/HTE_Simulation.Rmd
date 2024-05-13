@@ -1,0 +1,875 @@
+---
+title: 'HTE_Simulation:'
+author: "Yanji Du"
+date: '2023-03-16'
+output: html_document
+        toc: true # table of content true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(BART)
+library(fastDummies)
+library(GGally)
+library(grf)
+library(purrr)
+library(gridExtra)
+library(grid)
+library(energy)
+library(kableExtra)
+library(papaja)
+library(knitr)
+
+library(reticulate)
+#use_python("/Volumes/GoogleDrive")
+#use_condaenv("causalml-tf-py38")
+
+set.seed(123)
+```
+
+## PART I Simulation Studies
+# Simulation Setup
+
+We will set-up the simulation in the following groups:
+-Simple and complex covariate:
+-Linear and nonlinear covariate:
+-Low interactive and high interactive interactions
+
+Combined the attributes above, the treatment effects are computed as follows:
+1.Simple linear: tau = 5X_1 + 0.5X_2 +1.7
+2.Simple linear with interactions: tau = 0.73X_1*X_2
+3.Simple nonlinear: tau = 12X_1 + X_2^2
+4.Simple nonlinear with interactions: tau = 0.54ln(|X_1|)*(X_2)^2
+5.Complex linear treatment effect: tau = 0.6X_1 + 8X_2 + X_3 +1.8X_4+ X_5 + X_6 + 12
+6.Complex linear with interactions: tau = 0.6X_1*X_4 + 9X_2 + 1.8X_3*X_5 + X_6
+7.Complex nonlinear: tau = 0.6*X_1^2+X_2+ X_3+ln(|X_4|) +X_5^3 +X_6^{-1}
+8.Complex nonlinear with interactions: tau = 0.6*X_1^2+X_2*X_3+ln(|X_4|)*X_1 +X_5 +X_6^{-1}
+  - we are looking for different ways to rescale the simulation 7 and 8 due to 
+
+
+1. define simulation functions
+```{r}
+set.seed(123)
+
+tau_list <- function(X) {
+        tau_1 = 5 * X[,1] + 0.5*X[,2] + 1.7 #Simple linea
+        tau_2 = 0.73*X[,1]*X[,2] #Simple linear with interactions
+        tau_3 = 12*X[,1] + X[,2]^2
+        tau_4 = 0.54*log(abs(X[,1]))*X[,2]^2
+        tau_5 = 0.6*X[,1] + 8*X[,2] + X[,3] + 1.8*X[,4] + X[,5] + X[,6] + 12
+        tau_6 = 0.6*X[,1]*X[,4] + 9*X[,2] + 1.8*X[,3]*X[,5]+X[,6]
+        tau_7 = 0.6*X[,1]^2+X[,2]+ X[,3]+log(abs(X[,4])) + X[,5] +X[,6]^(-1)
+        tau_8 = 0.6*X[,1]^2+X[,2]*X[,3]+log(abs(X[,4])) *X[,1] + X[,5] +X[,6]^(-1)
+        #tau_7 = (0.6*X[,1]^2+X[,2]+ X[,3]+log(abs(X[,4])) + X[,5]^3 +X[,6]^(-1))/50 #rescale tau7 to a similar range as tau6
+        #tau_8 = (0.6*X[,1]^2+X[,2]*X[,3]+log(abs(X[,4])) *X[,1] + X[,5] +X[,6]^(-1))/50 #rescale tau7 to a similar range as tau6
+        
+        tau_x = list(tau_1, tau_2, tau_3, tau_4, tau_5, tau_6, tau_7, tau_8)
+        return(tau_x)
+}
+
+#alternative way( need to verify)
+# tau_list <- function(X) {
+#   tau_x <- list(
+#     apply(X, 2, function(x) 5 * x[1] + 0.5 * x[2] + 1.7),
+#     apply(X, 2, function(x) 0.73 * x[1] * x[2]),
+#     apply(X, 2, function(x) 12 * x[1] + x[2] ^ 2),
+#     apply(X, 2, function(x) 0.54 * log(abs(x[1])) * x[2])
+#   )
+#   return(tau_x)
+# }
+
+sim_all <- function (n, p = 10, sigma = 1.0) {
+        X = matrix(rnorm(n*p), ncol = p) #for some reason it is necessary in the 
+        #X = matrix(rnorm(n), ncol = p)
+        b = (X[,1]+ X[,2] + X[,3])/3
+        e = rep(0.5, n)
+        tau_x = tau_list(X)
+        w =rbinom(n, 1, e)
+        
+        #add something here that subtract all the simulated tau_x here and cbind them into a dataframe?
+        
+        output_list <- list()
+        for (i in seq_along(tau_x)) {
+           ## standardize 
+            tau_val_scaled <- lapply(tau_x, scale, center = TRUE)
+            tau_val <- tau_val_scaled[[i]]
+            #tau_val <- tau_x[[i]]
+           
+             y <- b + w * tau_val + sigma * rnorm(n)
+            output_list[[i]] <- data.frame(X = X, b = b, e = e, tau = tau_val, w = w, y = y)
+         }
+          
+  return(output_list)
+}
+
+```
+
+2. create the simulated dataset for the 
+```{r}
+set.seed(123)
+output <-sim_all(10000)
+
+output_tau1 <- output[[1]]
+output_tau2 <- output[[2]]
+output_tau3 <- output[[3]]
+output_tau4 <- output[[4]]
+output_tau5 <- output[[5]]
+output_tau6 <- output[[6]]
+output_tau7 <- output[[7]]
+output_tau8 <- output[[8]]
+
+#standardize simulation 7 and 8
+
+# ## simulation 7
+# mean_tau7 <- mean(output_tau7$tau)
+# sd_tau7 <- sd(output_tau7$tau)
+# 
+# output[[7]]$tau <- (output[[7]]$tau - mean_tau7) / sd_tau7
+# output_tau7 <- output[[7]]
+# 
+# ## simulation 8
+# mean_tau8 <- mean(output_tau8$tau)
+# sd_tau8 <- sd(output_tau8$tau)
+# 
+# output[[8]]$tau <- (output[[8]]$tau - mean_tau8) / sd_tau8
+# output_tau8 <- output[[8]]
+
+output_summary <- map_dfr(output, ~ summarise(.x,
+                               mean_tau = mean(tau),
+                               sd_tau = sd(tau),
+                               max_tau = max(tau),
+                               min_tau = min(tau),
+                               mean_y = mean(y),
+                               sd_y = sd(y),
+                               max_y = max(y),
+                               min_y = min(y)),
+                               .id = "dataset")%>%
+                  mutate(across(where(is.numeric), round, 2))
+
+output_summary$dataset= c(
+  "1. Simple linear",
+  "2. Simple linear with interactions",
+  "3. Simple Non-linear",
+  "4. Simple Non-linear with interactions",
+  "5.",
+  "6",
+  "7",
+  "8"
+)
+
+output_summary %>%
+  kbl(caption ="Table 1: Simulation Distribution Summary",
+      format = "latex",
+      booktabs = TRUE,
+      escape = FALSE)  #%>%
+  # kable_classic(full_width = F, html_font = "Cambria") %>%
+  # save_kable("table_1.png")
+
+apa_table(output_summary, 
+          caption = "Descriptive statistics of correct recall by dosage.",
+          escape = FALSE,
+          note = "This table was created with apa_table()."
+          )
+
+#dev.off()
+
+#1. flatten the nested list into a single dataframe 
+#output_df <- do.call(rbind, lapply(output, as.data.frame))  #### difficult to lacte the exact same dataframe. 
+
+kable(
+  output_summary,
+  format = "latex",
+  booktabs = TRUE,
+  escape = FALSE,
+  longtable = TRUE,
+  col.names = c("Simulation", "Mean $tau$", "$M$", "$SD$ ", "1", "2", " $sd$ out put", "max_output", "min_outcome"),
+  align = c("l", "c", "c", "c", "c", "c", "c", "c"),
+  digits = c(NA, 0, 2, 2, 2, 2, 2, 2),
+  caption = "Descriptive Statistics and Correlations for Study Variables")
+  # ) %>%
+  # kable_styling(full_width = TRUE) %>%
+  # footnote(
+  #   general_title = "Note.",
+  #   general = "$^a$0 = private schools and 1 = public schools. $^b$Tuition is measured in thousands of dollars.",
+  #   threeparttable = TRUE,
+  #   footnote_as_chunk = TRUE,
+  #   escape = FALSE
+  #   ) %>%
+  # row_spec(row = 0, align = "c") %>%
+  # column_spec(column = 1, width = "1.5in")
+
+papaja::apa_table(output_summary)
+```
+
+```{r}
+# Export the data frame to a CSV file
+#write.csv(output_df, "output.csv", row.names = FALSE)
+
+write.csv(output_tau1, "output_tau1.csv", row.names = FALSE)
+write.csv(output_tau2, "output_tau2.csv", row.names = FALSE)
+write.csv(output_tau3, "output_tau3.csv", row.names = FALSE)
+write.csv(output_tau4, "output_tau4.csv", row.names = FALSE)
+write.csv(output_tau5, "output_tau5.csv", row.names = FALSE)
+write.csv(output_tau6, "output_tau6.csv", row.names = FALSE)
+write.csv(output_tau7, "output_tau7.csv", row.names = FALSE)
+write.csv(output_tau8, "output_tau8.csv", row.names = FALSE)
+
+```
+
+
+
+3. full simulation loop
+```{r}
+
+#define the simualtion functions. 
+full_simulation_loop <- function(output_tauX){
+  #Causal Forest
+  cf_fit <- causal_forest(X = model.matrix(~., data = output_tauX %>% dplyr::select(!c(y, w, b, e, tau))),
+                            Y = output_tauX %>% pull(y),
+                            W = output_tauX %>% pull(w))
+  cforest_cate <- predict(cf_fit, model.matrix(~.,  output_tauX %>% select(!c(y, w, b, e, tau))), estimate.variance = T)
+  
+  cate_cf = cforest_cate$predictions
+  
+  #Bart
+
+  bart_fit <- wbart(data.frame(output_tauX %>% dplyr::select(!c(y, b, e, tau))),
+                             output_tauX %>% pull(y),
+                  nskip = 1000, ndpost = 1000) #1000 burn-in
+
+
+   y1 <- predict(bart_fit, data.frame(output_tauX %>%
+                                     dplyr::select(!c(y, b, e, tau)) %>%
+                                     mutate(w = 1)))
+   y0 <- predict(bart_fit, data.frame(output_tauX %>%
+                                     dplyr::select(!c(y, b, e, tau)) %>%
+                                     mutate(w = 0)))
+   cate_bart <- colMeans(y1) - colMeans(y0)
+   # cate_bart <- tibble(cate = colMeans(y1) - colMeans(y0))
+   # cate_bart <- cate_bart$cate
+
+
+  # Remove the unnecessary objects from memory
+   rm(cf_fit, cforest_cate, bart_fit, y1, y0)
+
+   cate_list <- list(cate_cf, cate_bart)
+   names(cate_list) <- c("cate_cf", "cate_bart")
+
+   return(cate_list)
+}
+```
+
+
+
+```{r, echo=FALSE}
+cate_all <- lapply(output, full_simulation_loop)
+
+ate_x <- lapply(output, function(df) {
+  ate <- mean(df$y[df$w == 1]) - mean(df$y[df$w == 0])
+  return(ate)
+})
+
+# for(i in seq_along(cate_all))(
+# cate_all[[i]]$cate_bart <- cate_all[[i]]$cate_bart$cate)
+```
+
+Plot the distribution 
+```{r}
+
+for (n in seq_along(cate_all)) {
+  cate_bart <- cate_all[[n]][[2]]
+  cate_cf <- cate_all[[n]][[1]]
+  
+  bart_plot <- ggplot(data = data.frame(cate_bart =cate_bart), aes(x = cate_bart)) + geom_histogram() + xlab("Individual Treatment Effect (ITE/CATE)") +
+  geom_vline(xintercept = ate_x[[n]], lty = "dashed") +
+  ylab("Frequency") + ggtitle("Distribution of CATE Predictions (BART)")
+  
+  cf_plot <- ggplot(data = data.frame(cate_cf = cate_cf), aes(x = cate_cf)) + 
+      geom_histogram() + xlab("Individual Treatment Effect (ITE/CATE)") +
+      geom_vline(xintercept = ate_x[[n]], lty = "dashed") +
+      ylab("Frequency") + ggtitle("Distribution of CATE Predictions (Causal Forest)")
+  
+
+  
+  # ggsave(filename = paste0("bart_plot_", n, ".png"), plot = bart_plot)
+  # ggsave(filename = paste0("cf_plot_", n, ".png"), plot = cf_plot)
+  
+  print(list(bart_plot,cf_plot))
+  
+}
+```
+
+```{r}
+for (n in seq_along(cate_dragonnet)){
+dg_plot <- ggplot(data = cate_dragonnet, aes(x = cate_dragonnet[[n]])) + 
+  geom_histogram() + 
+  xlab("Individual Treatment Effect (ITE/CATE)") +
+  ylab("Frequency") + 
+  ggtitle("Distribution of CATE Predictions (DragonNet)")
+
+dg_plot <- dg_plot + 
+  geom_vline(xintercept = ate_x[[n]], lty = "dashed")
+
+ggsave(filename = paste0("dg_plot_", n, ".png"), plot = cf_plot)
+
+print(dg_plot)
+}
+```
+
+# half sample analysis
+# split all the simulated dataset into half and run the simulation loop around it.
+```{r, echo = FALSE}
+set.seed(123)
+#define the split function:
+
+half_sample_split <- function(output_tauX) {
+          split = sample(seq_len(nrow(output_tauX)),size = nrow(output_tauX)/2)
+          output_tauX_1 =output_tauX[split,]
+          output_tauX_2 =output_tauX[-split,]
+          
+          list = list(output_tauX_1, output_tauX_2)
+          names(list) <- c("split_1", "split_2")
+          
+          return(list)
+}
+
+output_split <- lapply(output, half_sample_split)
+
+# export the split dataset to train dragonnet
+#?????
+
+```
+
+
+```{r}
+cate_dragonnet <- read_csv('/Volumes/GoogleDrive/My Drive/QMSS/Fall _2022/GR5999_MASTERS_THESIS/final project/GSS/codes/dragonnet_predictions.csv', col_names=TRUE)
+cate_dragonnet_split <- read_csv('/Volumes/GoogleDrive/My Drive/QMSS/Fall _2022/GR5999_MASTERS_THESIS/final project/GSS/codes/dragonnet_predictions_splits.csv', col_names=TRUE, skip=1)
+
+```
+
+```{r}
+cate_all_split <- lapply(output_split, function(output_tauX) {   #a nested list with slip datasets
+  lapply(output_tauX, full_simulation_loop)
+})
+
+# for(i in seq_along(cate_all_split))(
+# cate_all[[i]]$cate_bart <- cate_all[[i]]$cate_bart$cate)
+```
+
+```{r}
+# plot it
+library(ggplot2)
+library(GGally)
+library(cowplot)
+
+# Create an empty plot with the desired layout
+layout <- rbind(c(1, 2), c(3, 4), c(5, 6), c(7, 8))
+
+# Create a blank canvas for the combined plot
+combined_plot <- NULL
+
+## BART CATE
+for (n in seq_along (cate_all_split)){
+
+  cate_bart.1 <- cate_all_split[[n]]$split_1$cate_bart$cate
+  cate_bart.2 <- cate_all_split[[n]]$split_2$cate_bart$cate
+  
+  my_data <- data.frame(cate_bart_1 = sort(cate_bart.1),
+                        cate_bart_2 = sort(cate_bart.2))
+  plots<-ggpairs(my_data, 
+                columnLabels = c("BART CATE (1)", "BART CATE (2)"))
+  
+# Add the current plot to the combined plot
+ if (is.null(combined_plot)) {
+    combined_plot <- plots
+  } else {
+    combined_plot <- cowplot::plot_grid(combined_plot, plots, layout_matrix = layout)
+  }
+
+# Save the combined plot as a PNG file
+  ggsave(filename = paste0("bart_half_analysis_plot", n, ".png"), plot = plots)
+
+  print(plots)
+}
+
+# Save the combined plot as a PNG file
+ggsave(filename = "combined_plot.png", plot = combined_plot)
+```
+
+
+```{r}
+
+## Causal Forest CATE
+for (n in seq_along (cate_all_split)){
+
+  cate_cf.1 <- cate_all_split[[n]]$split_1$cate_cf
+  cate_cf.2 <- cate_all_split[[n]]$split_2$cate_cf
+  
+  my_data <- data.frame(cate_cf_1 = sort(cate_cf.1),
+                        cate_cf_2 = sort(cate_cf.2))
+  plots<-ggpairs(my_data, 
+                columnLabels = c("Causal Forest CATE (1)", "Causal Forest CATE (2)"))
+  
+  ggsave(filename = paste0("cf_half_analysis_plot", n, ".png"), plot = plots)
+  
+  print(plots)
+}
+```
+
+```{r}
+##dragonnet splits
+for (n in 1:8) {
+  cate_dg.1 <- cate_dragonnet_split[[paste0("cate_dragonnet_", n, "_1")]]
+  cate_dg.2 <- cate_dragonnet_split[[paste0("cate_dragonnet_", n, "_2")]]
+  
+  my_data <- data.frame(cate_dg_1 = sort(cate_dg.1),
+                        cate_dg_2 = sort(cate_dg.2))
+  plots <- ggpairs(my_data,
+                   columnLabels = c("DragonNet CATE (1)", "DrogonNet CATE (2)"))
+  
+  ggsave(filename = paste0("dg_half_analysis_plot", n, ".png"), plot = plots)
+  print(plots)
+}
+```
+
+
+
+
+# Statitical measurements of the of the half- sample analysis
+```{r}
+# initialize empty tables for causal forest and BART
+cf_table <- matrix(0, nrow = 3, ncol = 8)
+bart_table <- matrix(0, nrow = 3, ncol = 8)
+dg_table<- matrix(0, nrow = 3, ncol = 8)
+
+# loop through each simulation
+for (n in seq_along(cate_all_split)) {
+
+  # extract the necessary data
+  cate_cf_1 <- cate_all_split[[n]]$split_1$cate_cf
+  cate_cf_2 <- cate_all_split[[n]]$split_2$cate_cf
+  cate_bart_1 <- cate_all_split[[n]]$split_1$cate_bart
+  cate_bart_2 <- cate_all_split[[n]]$split_2$cate_bart
+  
+
+  # store the data in a data frame
+  my_data <- data.frame(cate_cf_1 = sort(cate_cf_1),
+                        cate_cf_2 = sort(cate_cf_2),
+                        cate_bart_1 = sort(cate_bart_1$cate),
+                        cate_bart_2 = sort(cate_bart_2$cate))
+
+  # calculate the correlation, distance correlation, and modified mean square error
+  correlation_cf <- cor(my_data$cate_cf_1, my_data$cate_cf_2)
+  distance_correlation_cf <- dcor(my_data$cate_cf_1, my_data$cate_cf_2, index = 1.0)
+  mod_mse_cf <- mean((my_data$cate_cf_1 - my_data$cate_cf_2)^2)/ate_x[[n]]
+
+  correlation_bart <- cor(my_data$cate_bart_1, my_data$cate_bart_2)
+  distance_correlation_bart <- dcor(my_data$cate_bart_1, my_data$cate_bart_2, index = 1.0)
+  mod_mse_bart <- mean((my_data$cate_bart_1 - my_data$cate_bart_2)^2)/ate_x[[n]]
+
+  # add the results to the tables
+  cf_table[1, n] <- round(correlation_cf, 3)
+  cf_table[2, n] <- round(distance_correlation_cf, 3)
+  cf_table[3, n] <- paste(round(100*mod_mse_cf , 2), "%", sep="")
+
+  bart_table[1, n] <- round(correlation_bart, 3)
+  bart_table[2, n] <- round(distance_correlation_bart, 3)
+  bart_table[3, n] <- paste(round(100*mod_mse_bart, 2), "%", sep="")
+}
+
+
+
+for (m in 1:8) {
+  cate_dg.1 <- cate_dragonnet_split[[paste0("cate_dragonnet_", m, "_1")]]
+  cate_dg.2 <- cate_dragonnet_split[[paste0("cate_dragonnet_", m, "_2")]]
+  
+  my_data <- data.frame(cate_dg_1 = sort(cate_dg.1),
+                        cate_dg_2 = sort(cate_dg.2))
+  
+  correlation_dg <- cor(my_data$cate_dg_1, my_data$cate_dg_2)
+  distance_correlation_dg <- dcor(my_data$cate_dg_1, my_data$cate_dg_2, index = 1.0)
+  mod_mse_dg <- mean((my_data$cate_dg_1 - my_data$cate_dg_2)^2)/ate_x[[n]]
+  dg_table[1, m] <- round(correlation_dg, 3)
+  dg_table[2, m] <- round(distance_correlation_dg, 3)
+  dg_table[3, m] <- paste(round(100*mod_mse_dg, 2), "%", sep="") #mod_mse_dg 
+}
+```
+
+```{r}
+  
+  
+# add column names to the tables
+colnames(cf_table) <- paste0("Simulation_", 1:8)
+colnames(bart_table) <- paste0("Simulation_", 1:8)
+colnames(dg_table) <- paste0("Simulation_", 1:8)
+
+# add row names to the tables
+rownames(cf_table) <- c("Correlation", "Distance Correlation", "Modified Mean Square Error")
+rownames(bart_table) <- c("Correlation", "Distance Correlation", "Modified Mean Square Error")
+rownames(dg_table) <- c("Correlation", "Distance Correlation", "Modified Mean Square Error")
+
+
+
+library(kableExtra)
+
+
+cf_table %>%
+  kbl(caption ="Table 1: Causal Forest Simulation Results")  %>%
+  kable_classic(full_width = F, html_font = "Cambria") %>%
+  kable_styling(latex_options = "striped") %>%
+  save_kable("table_2.png")
+
+#dev.off()
+
+bart_table %>%
+  kbl(caption ="Table 2: BART Simulation Results")  %>%
+  kable_classic(full_width = F, html_font = "Cambria") %>%
+  kable_styling(latex_options = "striped") %>%
+  save_kable("table_3.png")
+
+# dev.off()
+
+dg_table %>%
+  kbl(caption ="Table 3: DragonNet Simulation Results")  %>%
+  kable_classic(full_width = F, html_font = "Cambria") %>%
+  kable_styling(latex_options = "striped") %>%
+  save_kable("table_4.png")
+
+# dev.off()
+
+
+```
+
+
+
+#compare the model predictions with true tau
+```{r}
+# define the function for plotting
+scatter_plot_preds_vs_actuals <- function(preds_for_plot) {
+  
+  pdf(paste0("scatter_plot_", n, ".pdf"), width=20, height=5)
+ 
+  
+  #n_row <- ceiling(length(names(preds_for_plot)) / 5)
+
+  par(mfrow = c(1, 4))
+  par(mar = c(2, 2, 2, 2))  # Set margin sizes
+  
+  # Extract range of tau from the fourth element of preds_for_plot
+  tau_range <- range(preds_for_plot[['tau']])
+
+  for (i in 1:length(names(preds_for_plot))) {
+    label <- names(preds_for_plot)[i]
+    preds <- preds_for_plot[[label]]
+    plot(preds_for_plot[['tau']], preds, pch = 16, cex = 1.5, col = "black",
+         xlab = "Actual", ylab = "Prediction", main = label, cex.main = 2, ylim = c(-20,20), cex.axis = 1.5) # Set ylim to tau_range
+    abline(a = 0, b = 1, col = "gray", lwd = 1, lty = 1)  # Add perfect model line
+    legend("topright", legend = c("Predictions", "Perfect Model"), col = c("black", "gray"),
+           pch = c(16, NA), lwd = c(NA, 1), lty = c(NA, 1), cex = 2)
+  }
+
+  par(mfrow = c(1, 4))  # Reset to single plot layout
+  
+  #plot_filename <- paste0("scatter_plot_",n, ".png")
+ 
+  dev.off()
+
+  #  # Save plot as PNG file
+  # plot_filename <- paste0("scatter_plot_",n, ".png")
+  # ggsave(filename = plot_filename, plot = last_plot(), width = 5, height = 5, units = "in")
+}
+
+
+histogram_preds_vs_actuals <- function(preds_for_plot) {
+  pdf(paste0("hist_plot_", n, ".pdf"), width=20, height=5)
+  
+  #n_row <- ceiling(length(names(preds_for_plot)) / 2)
+  
+  par(mfrow = c(2, 4))
+  par(mar = c(2, 2, 2, 2))  # Set margin sizes
+
+  for (i in 1:length(names(preds_for_plot))) {
+    label <- names(preds_for_plot)[i]
+    #preds <- preds_for_plot[[label]]
+    hist(preds_for_plot[["tau"]], main = label, cex.main = 2, xlab = "Actual", ylab = "Frequency", col = "lightblue", border = "black", cex.axis = 2)
+    # hist(preds, main = label, cex.main = 2, xlab = "Prediction", ylab = "Frequency", col = "grey", border = "black", add = TRUE, cex.axis = 2)
+    legend("topright", legend = c("TRUE CATE", "Predictions"), col = c("grey", "black"), fill = c("lightblue", "grey"), border = NA, bty = "n", cex = 2)
+  }
+
+  
+  dev.off()
+}
+
+
+# build the dataframe for plotting
+for (n in seq_along(cate_all)) {
+preds_for_plot <- data.frame(
+                cf_cate = cate_all[[n]]$cate_cf,
+                bart_cate = cate_all[[n]]$cate_bart,
+                dg_cate =cate_dragonnet[n],
+                tau = output[[n]]$tau
+)
+
+#scatter_plot_preds_vs_actuals(preds_for_plot)
+
+# plot_filename <- paste0("scatter_plot_",n, ".png")
+# ggsave(filename = plot_filename, plot = last_plot(), width = 5, height = 5, units = "in")
+#ggsave(filename = paste0("preds_vs_actuals", n, ".png"), plot = plots)
+
+histogram_preds_vs_actuals(preds_for_plot)
+}
+```
+
+```{r, trails}
+hist_tau <- function(preds_for_plot) {
+  pdf(paste0("hist_plot.pdf"), width=20, height=10)
+  
+  par(mfrow = c(2, 4))
+  par(mar = c(2, 2, 2, 2))  
+
+  for (i in 1:length(names(preds_for_plot))) {
+    label <- names(preds_for_plot)[i]
+    preds <- preds_for_plot[[label]]
+    hist(preds_for_plot[["tau"]], main = label, cex.main = 2, xlab = "Actual", ylab = "Frequency", col = "lightblue", border = "black", cex.axis = 2)
+    hist(preds, main = label, cex.main = 2, xlab = "Prediction", ylab = "Frequency", col = "grey", border = "black", add = TRUE, cex.axis = 2)
+    #legend("topright", legend = c("TRUE CATE", "Predictions"), col = c("grey", "black"), fill = c("lightblue", "grey"), border = NA, bty = "n", cex = 2)
+  }
+
+
+  
+  dev.off()
+}
+
+
+# build the dataframe for plotting
+for (n in seq_along(cate_all)) {
+preds_for_plot <- data.frame(
+                # cf_cate = cate_all[[n]]$cate_cf,
+                # bart_cate = cate_all[[n]]$cate_bart,
+                # dg_cate =cate_dragonnet[n],
+                tau = output[[n]]$tau
+)
+
+#scatter_plot_preds_vs_actuals(preds_for_plot)
+
+# plot_filename <- paste0("scatter_plot_",n, ".png")
+# ggsave(filename = plot_filename, plot = last_plot(), width = 5, height = 5, units = "in")
+#ggsave(filename = paste0("preds_vs_actuals", n, ".png"), plot = plots)
+
+hist_tau(preds_for_plot)
+}
+
+hist_tau <- function(output) {
+  pdf(paste0("hist_plot.pdf"), width=20, height=10)
+  par(mfrow = c(2, 4))
+  par(mar = c(2, 2, 2, 2))
+  for (n in 1:8) {
+    preds_for_plot <- data.frame(
+      tau = output[[n]]$tau
+    )
+    label <- paste0("Simulation ", n)
+    hist(preds_for_plot$tau, main = label, cex.main = 2, xlab = "Tau", ylab = "Frequency", col = "lightblue", border = "black", cex.axis = 2)
+  }
+  dev.off()
+}
+
+hist_tau(output)
+```
+
+
+#Table for MSE
+```{r}
+# initialize empty tables for causal forest and BART
+mse_table <- matrix(0, nrow = 3, ncol = 8)
+
+# loop through each simulation
+for (n in seq_along(cate_all)) {
+
+  # extract the necessary data
+  cate_cf <- cate_all[[n]]$cate_cf
+  cate_bart <- cate_all[[n]]$cate_bart
+  cate_dg <- cate_dragonnet[[n]]
+  tau <-output[[n]]$tau
+
+  # store the data in a data frame
+  my_data <- data.frame(cate_cf = cate_cf,
+                        cate_bart = cate_bart,
+                        cate_dg = cate_dg,
+                        tau = tau)
+
+  # calculate the correlation, distance correlation, and modified mean square error
+  mse_cf <- mean((my_data$cate_cf - my_data$tau)^2)
+  mse_bart<- mean((my_data$cate_bart - my_data$tau)^2)
+  mse_dg <- mean((my_data$cate_dg - my_data$tau)^2)
+
+  # add the results to the tables
+  mse_table[1, n] <-  round(mse_cf,3)
+  mse_table[2, n] <-  round(mse_bart,3)
+  mse_table[3, n] <-  round(mse_dg,3)
+
+}
+
+# add column and row names to the tables
+colnames(mse_table) <- paste0("Simulation_", 1:8)
+rownames(mse_table) <- c("Causal Forest", "BART", "Dragonnet")
+
+mse_table %>%
+  kbl(caption ="Table: MSE across all models")  %>%
+  kable_classic(full_width = F, html_font = "Cambria") %>%
+  kable_styling(latex_options = "striped") %>%
+  save_kable("table.png")
+```
+
+
+
+
+repeat the simulation 100 times to get the MSE sd
+```{r}
+##repeat at group level
+df <- rep(sim_all(10000), times = 10)
+group_var <- rep(1:10, each=1)
+df_list <- split(df, group_var)
+
+
+#loop
+output_1_rep <- list()
+output_2_rep <- list()
+output_3_rep <- list()
+output_4_rep <- list()
+output_5_rep <- list()
+output_6_rep <- list()
+output_7_rep <- list()
+output_8_rep <- list()
+
+
+for (n in seq_along(df_list)) {
+  output_1_rep[[n]] <- df_list[[n]][[1]]
+  output_2_rep[[n]] <- df_list[[n]][[2]]
+  output_3_rep[[n]] <- df_list[[n]][[3]]
+  output_4_rep[[n]] <- df_list[[n]][[4]]
+  output_5_rep[[n]] <- df_list[[n]][[5]]
+  output_6_rep[[n]] <- df_list[[n]][[6]]
+  output_7_rep[[n]] <- df_list[[n]][[7]]
+  output_8_rep[[n]] <- df_list[[n]][[8]]
+}
+```
+
+Export the simulated dataframes and train them in dragonnet
+```{r}
+output_names <- paste0("output_", 1:8, "_df")
+
+# iterate over each output list and create a data frame with trial column
+for (i in 1:8) {
+  output_df <- bind_rows(get(paste0("output_", i, "_rep")), .id = "group_var") %>%
+    group_by(group_var) %>%
+    ungroup()
+  # assign output data frame to a new variable with a unique name
+  assign(output_names[i], output_df)
+}
+```
+
+```{r}
+write.csv(output_1_df, "output_1_df.csv", row.names = FALSE)
+write.csv(output_2_df, "output_2_df.csv", row.names = FALSE)
+write.csv(output_3_df, "output_3_df.csv", row.names = FALSE)
+write.csv(output_4_df, "output_4_df.csv", row.names = FALSE)
+write.csv(output_5_df, "output_5_df.csv", row.names = FALSE)
+write.csv(output_6_df, "output_6_df.csv", row.names = FALSE)
+write.csv(output_7_df, "output_7_df.csv", row.names = FALSE)
+write.csv(output_8_df, "output_8_df.csv", row.names = FALSE)
+
+```
+
+train BART and causal Forest on them
+```{r}
+cate_1_rep <- lapply(output_1_rep, full_simulation_loop)
+cate_2_rep <- lapply(output_2_rep, full_simulation_loop)
+cate_3_rep <- lapply(output_3_rep, full_simulation_loop)
+cate_4_rep <- lapply(output_4_rep, full_simulation_loop)
+cate_5_rep <- lapply(output_5_rep, full_simulation_loop)
+cate_6_rep <- lapply(output_6_rep, full_simulation_loop)
+cate_7_rep <- lapply(output_7_rep, full_simulation_loop)
+cate_8_rep <- lapply(output_8_rep, full_simulation_loop)
+```
+
+calculate the MSE
+```{r, trial}
+mse_cf <- rep(NA, n)
+mse_bart <- rep(NA, n)
+#mse_dg <- rep(NA, n)
+
+for (n in seq_along(cate_1_rep)) {
+
+  # extract the necessary data
+  cate_cf_rep <- cate_1_rep[[n]]$cate_cf
+  cate_bart_rep <- cate_1_rep[[n]]$cate_bart
+  #cate_dg <- cate_dragonnet[[n]]
+  tau <- output_1_rep[[n]]$tau
+
+  # store the data in a data frame
+  # my_data <- data.frame(cate_cf = cate_cf,
+  #                       cate_bart = cate_bart,
+  #                       cate_dg = cate_dg,
+  #                       tau = tau)
+
+  # calculate the correlation, distance correlation, and modified mean square error
+  mse_cf[n] <- mean((cate_cf_rep - tau)^2)
+  mse_bart[n]<- mean((cate_bart_rep - tau)^2)
+  #mse_dg <- mean((my_data$cate_dg - my_data$tau)^2)
+}
+
+sd_cf <-sd(mse_cf)
+sd_bart <-sd(mse_bart)
+```
+
+```{r}
+output_reps <- list(output_1_rep, output_2_rep, output_3_rep, output_4_rep, output_5_rep, output_6_rep, output_7_rep, output_8_rep)
+cate_reps <- list(cate_1_rep, cate_2_rep, cate_3_rep, cate_4_rep, cate_5_rep,cate_6_rep,cate_7_rep,cate_8_rep)
+
+for (j in seq_along(output_reps)) {
+  mse_cf <- rep(NA, length(output_reps[[j]]))
+  mse_bart <- rep(NA, length(output_reps[[j]]))
+  #mse_dg <- rep(NA, n)
+
+  for (n in seq_along(cate_reps[[j]])) {
+    # extract the necessary data
+    cate_cf_rep <- cate_reps[[j]][[n]]$cate_cf
+    cate_bart_rep <- cate_reps[[j]][[n]]$cate_bart
+    #cate_dg <- cate_dragonnet[[n]]
+    tau <- output_reps[[j]][[n]]$tau
+
+    # calculate the correlation, distance correlation, and modified mean square error
+    mse_cf[n] <- mean((cate_cf_rep - tau)^2)
+    mse_bart[n] <- mean((cate_bart_rep - tau)^2)
+    #mse_dg <- mean((my_data$cate_dg - my_data$tau)^2)
+  }
+
+  sd_cf <- sd(mse_cf)
+  sd_bart <- sd(mse_bart)
+  #sd_dg <- sd(mse_dg)
+
+  # print or store the results for this output_rep
+  print(paste0("MSE_sd ", j, ": sd_cf = ", sd_cf, ", sd_bart = ", sd_bart, "sd_dg =", sd_dg))
+}
+```
+
+
+
+
+```
+
+Appendix: draft codes
+# Camparisons between models
+```{r}
+for (n in seq_along(cate_all)){
+df_Cate <- data.frame(cbind(cate_all[[n]]$cate_cf,cate_all[[n]]$cate_bart))
+colnames(df_Cate) <- c("Causal Forest CATE", "BART CATE")
+
+plots<-ggpairs(df_Cate,
+        columnLabels = c("BART CATE", "Causal Forest CATE"))
+print(plots)
+}
+```
+
